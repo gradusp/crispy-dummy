@@ -5,6 +5,7 @@ import (
 
 	"github.com/gradusp/crispy-dummy/internal/app"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 var appPromRegistry atomic.Value
@@ -15,9 +16,22 @@ func setupMetrics() error {
 	if err != nil {
 		return err
 	}
+	var reg *prometheus.Registry
 	if enabled {
-		appPromRegistry.Store(prometheus.NewRegistry())
+		reg = prometheus.NewRegistry()
+		//добавим по умолчанию гошные + системные коллекторы
+		cols := []prometheus.Collector{
+			collectors.NewBuildInfoCollector(),
+			collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+			collectors.NewGoCollector(),
+		}
+		for _, c := range cols {
+			if err = reg.Register(c); err != nil {
+				return err
+			}
+		}
 	}
+	appPromRegistry.Store(reg)
 	return nil
 }
 

@@ -32,7 +32,9 @@ func main() {
 	if err = setupMetrics(); err != nil {
 		logger.Fatalf(ctx, "setup metrics: %v", err)
 	}
-
+	if err = setupTracer(); err != nil {
+		logger.Fatalf(ctx, "setup tracer: %v", err)
+	}
 	var srv *server.APIServer
 	if srv, err = setupServer(ctx); err != nil {
 		logger.Fatalf(ctx, "setup server: %v", err)

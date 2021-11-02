@@ -7,6 +7,24 @@ GOLANGCI_BIN:=$(GOBIN)/golangci-lint
 GOLANGCI_REPO=https://github.com/golangci/golangci-lint
 GOLANGCI_LATEST_VERSION:= $(shell git ls-remote --tags --refs --sort='v:refname' $(GOLANGCI_REPO)|tail -1|egrep -E -o "v\d+\.\d+\..*")
 
+GIT_TAG:=$(shell git describe --exact-match --abbrev=0 --tags 2> /dev/null)
+GIT_HASH:=$(shell git log --format="%h" -n 1 2> /dev/null)
+GIT_BRANCH:=$(shell git branch 2> /dev/null | grep '*' | cut -f2 -d' ')
+GO_VERSION:=$(shell go version | sed -E 's/.* go(.*) .*/\1/g')
+BUILD_TS:=$(shell date +%FT%T%z)
+VERSION:=$(shell cat ./VERSION 2> /dev/null | sed -n "1p")
+APP_NAME:=crispy/dummy
+APP_VERSION:=$(if $(VERSION),$(VERSION),$(if $(GIT_TAG),$(GIT_TAG),$(GIT_BRANCH)))
+
+
+APP_IDENTITY:=github.com/gradusp/goplatform/app/idetity
+LDFLAGS:=-X '$(APP_IDENTITY).Name=$(APP_NAME)'\
+         -X '$(APP_IDENTITY).Version=$(APP_VERSION)'\
+         -X '$(APP_IDENTITY).BuildTS=$(BUILD_TS)'\
+         -X '$(APP_IDENTITY).BuildBranch=$(GIT_BRANCH)'\
+         -X '$(APP_IDENTITY).BuildHash=$(GIT_HASH)'\
+         -X '$(APP_IDENTITY).BuildTag=$(GIT_TAG)'\
+
 ifneq ($(wildcard $(GOLANGCI_BIN)),)
 	GOLANGCI_CUR_VERSION:=v$(shell $(GOLANGCI_BIN) --version|sed -E 's/.* version (.*) built from .* on .*/\1/g')
 else
@@ -84,7 +102,21 @@ generate: bin-tools
 .PHONY: test
 test:
 	$(info Running tests...)
-	go clean -testcache && go test -v  ./...
+	@go clean -testcache && go test -v ./...
+
+
+DUMMY-MAIN:=$(CURDIR)/cmd/dummy
+DUMMY-BIN:=$(CURDIR)/bin/dummy
+
+.PHONY: build-dummy
+build-dummy: go-deps
+	$(info building 'dummy' server...)
+	@go build -ldflags="$(LDFLAGS)" -o $(DUMMY-BIN) $(DUMMY-MAIN)
+
+.PHONY: build-dummy-d
+build-dummy-d:
+	$(info building 'dummy-debug' server...)
+	@go build -ldflags="$(LDFLAGS)" -gcflags="all=-N -l" -o $(DUMMY-BIN)-dbg $(DUMMY-MAIN)
 
 
 
