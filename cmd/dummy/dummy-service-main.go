@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+
 	"github.com/gradusp/crispy-dummy/internal/app"
 	"github.com/gradusp/crispy-dummy/internal/config"
+	"github.com/gradusp/go-platform/app/tracing/ot"
 	"github.com/gradusp/go-platform/logger"
 	pkgNet "github.com/gradusp/go-platform/pkg/net"
 	"github.com/gradusp/go-platform/server"
@@ -51,5 +54,8 @@ func main() {
 	if err = srv.Run(ctx, ep, server.RunWithGracefulStop(gracefulDuration)); err != nil {
 		logger.Fatalf(ctx, "run server: %v", err)
 	}
+	WhenHaveTracerProvider(func(tp ot.TracerProvider) {
+		_ = tp.Shutdown(context.Background())
+	})
 	logger.Info(ctx, "--== BYE ==--")
 }

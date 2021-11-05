@@ -17,7 +17,7 @@ APP_NAME:=crispy/dummy
 APP_VERSION:=$(if $(VERSION),$(VERSION),$(if $(GIT_TAG),$(GIT_TAG),$(GIT_BRANCH)))
 
 
-APP_IDENTITY:=github.com/gradusp/goplatform/app/idetity
+APP_IDENTITY:=github.com/gradusp/go-platform/app/identity
 LDFLAGS:=-X '$(APP_IDENTITY).Name=$(APP_NAME)'\
          -X '$(APP_IDENTITY).Version=$(APP_VERSION)'\
          -X '$(APP_IDENTITY).BuildTS=$(BUILD_TS)'\
@@ -37,6 +37,7 @@ install-linter:
 ifneq ($(GOLANGCI_CUR_VERSION), $(GOLANGCI_LATEST_VERSION))
 	$(info Installing GOLANGCI-LINT $(GOLANGCI_LATEST_VERSION)...)
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s $(GOLANGCI_LATEST_VERSION)
+	@chmod +x $(GOLANGCI_BIN)
 else
 	@echo "GOLANGCI-LINT is need not install"
 endif
