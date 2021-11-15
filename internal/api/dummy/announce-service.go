@@ -7,6 +7,7 @@ import (
 	"net"
 	"runtime"
 	"sort"
+	"sync"
 
 	"github.com/gradusp/crispy-dummy/pkg/dummy"
 	"github.com/gradusp/go-platform/pkg/slice"
@@ -219,8 +220,11 @@ func (srv *announceService) enter(ctx context.Context) (leave func(), err error)
 	case <-ctx.Done():
 		err = ctx.Err()
 	case srv.sema <- struct{}{}:
+		var o sync.Once
 		leave = func() {
-			<-srv.sema
+			o.Do(func() {
+				<-srv.sema
+			})
 		}
 		return
 	}
