@@ -1,0 +1,20 @@
+[Unit]
+Description=crispy dummy service
+ConditionPathExists=/opt/crispy/dummy/dummy
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+LimitNOFILE=1024
+Restart=on-failure
+RestartSec=10
+WorkingDirectory=/opt/crispy/dummy
+ExecStart=/opt/crispy/dummy/dummy -config=dummy.yaml
+KillSignal=SIGINT
+SendSIGKILL=no
+PermissionsStartOnly=true
+
+[Install]
+WantedBy=multi-user.target

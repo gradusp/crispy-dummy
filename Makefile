@@ -6,6 +6,9 @@ export GOBIN=$(CURDIR)/bin
 GOLANGCI_BIN:=$(GOBIN)/golangci-lint
 GOLANGCI_REPO=https://github.com/golangci/golangci-lint
 GOLANGCI_LATEST_VERSION:= $(shell git ls-remote --tags --refs --sort='v:refname' $(GOLANGCI_REPO)|tail -1|egrep -E -o "v\d+\.\d+\..*")
+NFPM_BIN:=$(GOBIN)/nfpm
+DEPLOY:=$(CURDIR)/deploy
+
 
 GIT_TAG:=$(shell git describe --exact-match --abbrev=0 --tags 2> /dev/null)
 GIT_HASH:=$(shell git log --format="%h" -n 1 2> /dev/null)
@@ -13,7 +16,7 @@ GIT_BRANCH:=$(shell git branch 2> /dev/null | grep '*' | cut -f2 -d' ')
 GO_VERSION:=$(shell go version | sed -E 's/.* go(.*) .*/\1/g')
 BUILD_TS:=$(shell date +%FT%T%z)
 VERSION:=$(shell cat ./VERSION 2> /dev/null | sed -n "1p")
-APP_NAME:=crispy/dummy
+APP_NAME:=crispy-dummy
 APP_VERSION:=$(if $(VERSION),$(VERSION),$(if $(GIT_TAG),$(GIT_TAG),$(GIT_BRANCH)))
 
 
@@ -55,8 +58,8 @@ lint: install-linter
 # install project dependencies
 .PHONY: go-deps
 go-deps:
-	$(info Install dependencies...)
-	@go mod tidy && go mod vendor && go mod verify
+	$(info Check go modules dependencies...)
+	@go mod tidy && go mod vendor && go mod verify && echo "success"
 
 .PHONY: bin-tools
 bin-tools:
@@ -108,18 +111,56 @@ test:
 	@go clean -testcache && go test -v ./...
 
 
-DUMMY-MAIN:=$(CURDIR)/cmd/dummy
-DUMMY-BIN:=$(CURDIR)/bin/dummy
 
-.PHONY: build-dummy
-build-dummy: go-deps
-	$(info building 'dummy' server...)
-	@go build -ldflags="$(LDFLAGS)" -o $(DUMMY-BIN) $(DUMMY-MAIN)
+DUMMY_MAIN:=$(CURDIR)/cmd/dummy
+DUMMY_BIN?=$(CURDIR)/bin/dummy
 
-.PHONY: build-dummy-d
-build-dummy-d:
-	$(info building 'dummy-debug' server...)
-	@go build -ldflags="$(LDFLAGS)" -gcflags="all=-N -l" -o $(DUMMY-BIN)-dbg $(DUMMY-MAIN)
+.PHONY: dummy
+dummy: go-deps
+	$(info ENV:[$(BUILD_ENV)]  GC_FLAGS:[$(GC_FLAGS)]  OUT:"$(DUMMY_BIN)")
+	@echo building DUMMY server... && \
+	$(BUILD_ENV) go build -ldflags="$(LDFLAGS)" $(GC_FLAGS) -o $(DUMMY_BIN) $(DUMMY_MAIN) && \
+	echo "success"
 
+
+.PHONY: dummy-dbg
+dummy-dbg: GC_FLAGS:=-gcflags="all=-N -l"
+dummy-dbg: DUMMY_BIN=$(CURDIR)/bin/dummy-dbg
+dummy-dbg: dummy
+	@echo "" > /dev/null
+
+
+.PHONY: dummy-linux
+dummy-linux: BUILD_ENV=env GOOS=linux GOARCH=amd64
+dummy-linux: dummy
+	@echo "" > /dev/null
+
+
+.PHONY: install-npfm
+install-npfm:
+ifeq ($(wildcard $(NFPM_BIN)),)
+	$(info install 'npfm' tool...)
+	@go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest && echo "success"
+endif
+	@$(NFPM_BIN) >/dev/null
+
+
+.PHONY: rpm
+rpm: NPFM-CONF:=$(shell mktemp -u nfmp-XXXXXXXXXX).yaml
+rpm: RPM=$(DEPLOY)/rpm
+rpm: ARTIFACTS=$(RPM)/artifacts
+rpm: DUMMY_BIN=$(ARTIFACTS)/dummy
+rpm: install-npfm
+	@rm -rf $(ARTIFACTS) 2>/dev/null && mkdir -p $(ARTIFACTS) && \
+	cat $(DEPLOY)/.nfpm-template.yaml | \
+		 sed -e 's;<name>;$(APP_NAME);' \
+		     -e 's/<version>/$(VERSION)/' \
+		     -e 's;<rpm>;$(RPM);' \
+		     -e 's;<artifacts>;$(ARTIFACTS);' \
+	     > $(ARTIFACTS)/$(NPFM-CONF) && \
+	env DUMMY_BIN=$(DUMMY_BIN) $(MAKE) dummy-linux && \
+	echo "building RPM..." && \
+	$(NFPM_BIN) pkg --config="$(ARTIFACTS)/$(NPFM-CONF)" --packager=rpm --target="$(ARTIFACTS)" && \
+	echo "success"
 
 
