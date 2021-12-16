@@ -5,7 +5,7 @@ $(value $(shell [ ! -d "$(CURDIR)/bin" ] && mkdir -p "$(CURDIR)/bin"))
 export GOBIN=$(CURDIR)/bin
 GOLANGCI_BIN:=$(GOBIN)/golangci-lint
 GOLANGCI_REPO=https://github.com/golangci/golangci-lint
-GOLANGCI_LATEST_VERSION:= $(shell git ls-remote --tags --refs --sort='v:refname' $(GOLANGCI_REPO)|tail -1|egrep -E -o "v\d+\.\d+\..*")
+GOLANGCI_LATEST_VERSION:= $(shell git ls-remote --tags --refs --sort='v:refname' $(GOLANGCI_REPO)|tail -1|egrep -o "v[0-9]+.*")
 NFPM_BIN:=$(GOBIN)/nfpm
 DEPLOY:=$(CURDIR)/deploy
 
@@ -16,7 +16,13 @@ GIT_BRANCH:=$(shell git branch 2> /dev/null | grep '*' | cut -f2 -d' ')
 GO_VERSION:=$(shell go version | sed -E 's/.* go(.*) .*/\1/g')
 BUILD_TS:=$(shell date +%FT%T%z)
 VERSION:=$(shell cat ./VERSION 2> /dev/null | sed -n "1p")
-APP_NAME:=crispy-dummy
+
+APP:=dummy
+PROJECT:=crispy
+APP_NAME=$(PROJECT)-$(APP)
+APP_VERSION:=$(if $(VERSION),$(VERSION),$(if $(GIT_TAG),$(GIT_TAG),$(GIT_BRANCH)))
+APP_MAIN:=$(CURDIR)/cmd/$(APP)
+APP_BIN?=$(CURDIR)/bin/$(APP)
 APP_VERSION:=$(if $(VERSION),$(VERSION),$(if $(GIT_TAG),$(GIT_TAG),$(GIT_BRANCH)))
 
 
@@ -89,6 +95,7 @@ generate: bin-tools
 	@PATH=$(PATH):$(GOBIN) && \
 	protoc -I $(CURDIR)/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/ \
 		-I $(CURDIR)/3d-party \
+		-I /usr/local/include \
 		--go_opt=paths=source_relative \
 		--go-grpc_opt=paths=source_relative \
 		--go_out $(CURDIR)/pkg \
@@ -100,6 +107,7 @@ generate: bin-tools
 		dummy/dummy.proto && \
 	protoc -I $(CURDIR)/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/ \
 		-I $(CURDIR)/3d-party \
+		-I /usr/local/include \
 		--proto_path=$(CURDIR)/api \
 		--openapiv2_out $(CURDIR)/internal/api \
 		--openapiv2_opt logtostderr=true \
@@ -111,28 +119,24 @@ test:
 	@go clean -testcache && go test -v ./...
 
 
-
-DUMMY_MAIN:=$(CURDIR)/cmd/dummy
-DUMMY_BIN?=$(CURDIR)/bin/dummy
-
-.PHONY: dummy
-dummy: go-deps
-	$(info ENV:[$(BUILD_ENV)]  GC_FLAGS:[$(GC_FLAGS)]  OUT:"$(DUMMY_BIN)")
-	@echo building DUMMY server... && \
-	$(BUILD_ENV) go build -ldflags="$(LDFLAGS)" $(GC_FLAGS) -o $(DUMMY_BIN) $(DUMMY_MAIN) && \
+.PHONY: $(APP)
+$(APP): go-deps
+	$(info ENV:[$(BUILD_ENV)]  GC_FLAGS:[$(GC_FLAGS)]  OUT:"$(APP_BIN)")
+	@echo "building '$(APP)'..." && \
+	$(BUILD_ENV) go build -ldflags="$(LDFLAGS)" $(GC_FLAGS) -o $(APP_BIN) $(APP_MAIN) && \
 	echo "success"
 
 
-.PHONY: dummy-dbg
-dummy-dbg: GC_FLAGS:=-gcflags="all=-N -l"
-dummy-dbg: DUMMY_BIN=$(CURDIR)/bin/dummy-dbg
-dummy-dbg: dummy
+.PHONY: $(APP)-dbg
+$(APP)-dbg: GC_FLAGS:=-gcflags="all=-N -l"
+$(APP)-dbg: APP_BIN=$(CURDIR)/bin/$(APP)-dbg
+$(APP)-dbg: $(APP)
 	@echo "" > /dev/null
 
 
-.PHONY: dummy-linux
-dummy-linux: BUILD_ENV=env GOOS=linux GOARCH=amd64
-dummy-linux: dummy
+.PHONY: $(APP)-linux
+$(APP)-linux: BUILD_ENV=env GOOS=linux GOARCH=amd64
+$(APP)-linux: $(APP)
 	@echo "" > /dev/null
 
 
@@ -149,18 +153,47 @@ endif
 rpm: NPFM-CONF:=$(shell mktemp -u nfmp-XXXXXXXXXX).yaml
 rpm: RPM=$(DEPLOY)/rpm
 rpm: ARTIFACTS=$(RPM)/artifacts
-rpm: DUMMY_BIN=$(ARTIFACTS)/dummy
+rpm: APP_BIN=$(ARTIFACTS)/$(APP_NAME)
 rpm: install-npfm
 	@rm -rf $(ARTIFACTS) 2>/dev/null && mkdir -p $(ARTIFACTS) && \
-	cat $(DEPLOY)/.nfpm-template.yaml | \
-		 sed -e 's;<name>;$(APP_NAME);' \
-		     -e 's/<version>/$(VERSION)/' \
-		     -e 's;<rpm>;$(RPM);' \
-		     -e 's;<artifacts>;$(ARTIFACTS);' \
-	     > $(ARTIFACTS)/$(NPFM-CONF) && \
-	env DUMMY_BIN=$(DUMMY_BIN) $(MAKE) dummy-linux && \
-	echo "building RPM..." && \
+	cat $(RPM)/.service-config.yaml | \
+         sed -e 's/<service>/$(APP_NAME)/' \
+         > $(ARTIFACTS)/$(APP_NAME).yaml && \
+	cat $(RPM)/.service-unit.service | \
+         sed -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/$(APP_NAME).service && \
+	cat $(RPM)/.postinstall.sh | \
+         sed -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/postinstall.sh && \
+	cat $(RPM)/.preinstall.sh | \
+         sed -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/preinstall.sh && \
+	cat $(RPM)/.postremove.sh | \
+         sed -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/postremove.sh && \
+	cat $(RPM)/.preremove.sh | \
+         sed -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/preremove.sh && \
+	cat $(DEPLOY)/.packager-config.yaml | \
+         sed -e 's;<name>;$(APP_NAME);g' \
+             -e 's/<version>/$(VERSION)/g' \
+             -e 's;<artifacts>;$(ARTIFACTS);g' \
+             -e 's/<service>/$(APP_NAME)/g' \
+             -e 's/<app>/$(APP)/g' \
+             -e 's/<project>/$(PROJECT)/g' \
+         > $(ARTIFACTS)/$(NPFM-CONF) && \
+	env APP_BIN=$(APP_BIN) $(MAKE) $(APP)-linux && \
+	echo "building '$@'..." && \
 	$(NFPM_BIN) pkg --config="$(ARTIFACTS)/$(NPFM-CONF)" --packager=rpm --target="$(ARTIFACTS)" && \
 	echo "success"
-
 

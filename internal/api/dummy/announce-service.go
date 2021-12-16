@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"net"
+	"net/url"
 	"runtime"
 	"sort"
 	"sync"
@@ -25,7 +26,7 @@ import (
 
 //GetSwaggerDocs get swagger spec docs
 func GetSwaggerDocs() (*server.SwaggerSpec, error) {
-	const api = "dummy/GetSwaggerDocs"
+	const api = "GetSwaggerDocs"
 	ret := new(server.SwaggerSpec)
 	err := json.Unmarshal(dummyRawSwagger, ret)
 	return ret, errors.Wrap(err, api)
@@ -33,14 +34,13 @@ func GetSwaggerDocs() (*server.SwaggerSpec, error) {
 
 //NewAnnounceService creates AnnounceService as server.APIService
 func NewAnnounceService(ctx context.Context, netInterfaceName string) (server.APIService, error) {
-	const api = "dummy/NewAnnounceService"
+	const api = "NewAnnounceService"
 
 	netIface, err := net.InterfaceByName(netInterfaceName)
 	if err != nil {
-		return nil, errors.Wrapf(err, "%s: net-intarface('%s')", api, netInterfaceName)
+		return nil, errors.Wrapf(err, "%s: net-intarface '%s'", api, netInterfaceName)
 	}
 	appCtx, stop := context.WithCancel(ctx)
-
 	ret := &announceService{
 		appCtx:       appCtx,
 		stop:         stop,
@@ -63,6 +63,10 @@ var (
 
 	//go:embed dummy.swagger.json
 	dummyRawSwagger []byte
+)
+
+const (
+	mask32 = "/32"
 )
 
 type announceService struct {
@@ -96,21 +100,25 @@ func (srv *announceService) OnStop() {
 }
 
 //GetState ...
-func (srv *announceService) GetState(ctx context.Context, _ *emptypb.Empty) (*dummy.GetStateResponse, error) {
+func (srv *announceService) GetState(ctx context.Context, _ *emptypb.Empty) (resp *dummy.GetStateResponse, err error) {
+	var leave func()
+	if leave, err = srv.enter(ctx); err != nil {
+		return
+	}
+	defer func() {
+		leave()
+		err = srv.correctError(err)
+	}()
+
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.String("net-interface", srv.netInterface.Name))
-
-	leave, e := srv.enter(ctx)
-	if e != nil {
-		return nil, e
-	}
-	defer leave()
 	var addrs []net.Addr
-	if addrs, e = srv.netInterface.Addrs(); e != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "get addresses from '%s' interface",
+	if addrs, err = srv.netInterface.Addrs(); err != nil {
+		err = errors.WithMessagef(err, "get addresses from '%s' interface",
 			srv.netInterface.Name)
+		return
 	}
-	resp := new(dummy.GetStateResponse)
+	resp = new(dummy.GetStateResponse)
 	resp.Services = make([]string, 0, len(addrs))
 	for _, a := range addrs {
 		resp.Services = append(resp.Services, a.String())
@@ -123,94 +131,129 @@ func (srv *announceService) GetState(ctx context.Context, _ *emptypb.Empty) (*du
 }
 
 //RemoveIP ...
-func (srv *announceService) RemoveIP(ctx context.Context, req *dummy.RemoveIpRequest) (*emptypb.Empty, error) {
+func (srv *announceService) RemoveIP(ctx context.Context, req *dummy.RemoveIpRequest) (resp *emptypb.Empty, err error) {
+	var leave func()
+	if leave, err = srv.enter(ctx); err != nil {
+		return
+	}
+	defer func() {
+		leave()
+		err = srv.correctError(err)
+	}()
+
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("net-interface", srv.netInterface.Name),
-		attribute.String("IP-to-REMOVE", req.GetIp()),
+		attribute.String("IP-to-remove", req.GetIp()),
 	)
-	leave, e := srv.enter(ctx)
-	if e != nil {
-		return nil, e
-	}
-	defer leave()
+
 	ip := req.GetIp()
 	if len(ip) == 0 || net.ParseIP(ip) == nil {
-		return nil, status.Errorf(codes.InvalidArgument, "provided invalid IP(%s)", ip)
+		err = status.Errorf(codes.InvalidArgument, "provided invalid IP(%s)", ip)
+		return
 	}
 
-	addr2del := ip + "/32"
+	addr2del := ip + mask32
 	var found bool
-	if found, e = srv.isAddrIn(addr2del); e != nil {
-		return nil, status.Errorf(codes.Internal, "isAddrIn(%s) -> %v", addr2del, e)
+	if found, err = srv.isAddrIn(addr2del); err != nil {
+		return
 	}
 	if !found {
-		return nil, status.Errorf(codes.NotFound, "addr '%s' is not found from '%s' interface",
+		err = status.Errorf(codes.NotFound, "addr '%s' is not found from '%s' interface",
 			addr2del, srv.netInterface.Name)
+		return
 	}
-
 	var lnk netlink.Link
-	if lnk, e = netlink.LinkByName(srv.netInterface.Name); e != nil {
-		return nil, status.Errorf(codes.Internal, "'netlink': LinkByName('%s') -> %v",
-			srv.netInterface.Name, e)
+	if lnk, err = netlink.LinkByName(srv.netInterface.Name); err != nil {
+		err = errors.WithMessagef(err, "netlink/LinkByName('%s')", srv.netInterface.Name)
+		return
 	}
 	var addr *netlink.Addr
-	if addr, e = netlink.ParseAddr(addr2del); e != nil {
-		return nil, status.Errorf(codes.Internal, "netlink: LinkByName('%s') ->  %v",
-			addr2del, e)
+	if addr, err = netlink.ParseAddr(addr2del); err != nil {
+		err = errors.WithMessagef(err, "netlink/LinkByName('%s')", addr2del)
+		return
 	}
-	if e = netlink.AddrDel(lnk, addr); e != nil {
-		return nil, status.Errorf(codes.Internal, "netlink: AddrDel('%s') -> %v",
-			addr, e)
+	if err = netlink.AddrDel(lnk, addr); err != nil {
+		err = errors.WithMessagef(err, "netlink/AddrDel('%s')", addr)
+		return
 	}
-
 	return new(emptypb.Empty), nil
 }
 
 //AddIP ...
-func (srv *announceService) AddIP(ctx context.Context, req *dummy.AddIpRequest) (*emptypb.Empty, error) {
+func (srv *announceService) AddIP(ctx context.Context, req *dummy.AddIpRequest) (resp *emptypb.Empty, err error) {
+	var leave func()
+	if leave, err = srv.enter(ctx); err != nil {
+		return
+	}
+	defer func() {
+		leave()
+		err = srv.correctError(err)
+	}()
+
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("net-interface", srv.netInterface.Name),
-		attribute.String("IP-to-ADD", req.GetIp()),
+		attribute.String("IP-to-add", req.GetIp()),
 	)
-
-	leave, e := srv.enter(ctx)
-	if e != nil {
-		return nil, e
-	}
-	defer leave()
 
 	ip := req.GetIp()
 	if len(ip) == 0 || net.ParseIP(ip) == nil {
-		return nil, status.Errorf(codes.InvalidArgument, "provided invalid IP(%s)", ip)
+		err = status.Errorf(codes.InvalidArgument, "provided invalid IP(%s)", ip)
+		return
 	}
-	addr2Add := ip + "/32"
+	addr2Add := ip + mask32
 	var found bool
-	if found, e = srv.isAddrIn(addr2Add); e != nil {
-		return nil, status.Errorf(codes.Internal, "isAddrIn('%s') -> %v", addr2Add, e)
+	if found, err = srv.isAddrIn(addr2Add); err != nil {
+		return
 	}
-
 	if found {
-		return nil, status.Errorf(codes.AlreadyExists, "addr '%s' already exist in '%s' interface",
+		err = status.Errorf(codes.AlreadyExists, "addr '%s' already exist in '%s' interface",
 			addr2Add, srv.netInterface.Name)
+		return
 	}
 
 	var lnk netlink.Link
-	if lnk, e = netlink.LinkByName(srv.netInterface.Name); e != nil {
-		return nil, status.Errorf(codes.Internal, "netlink: LinkByName('%s') -> %v",
-			srv.netInterface.Name, e)
+	if lnk, err = netlink.LinkByName(srv.netInterface.Name); err != nil {
+		err = errors.WithMessagef(err, "netlink/LinkByName('%s')", srv.netInterface.Name)
+		return
 	}
 	var addr *netlink.Addr
-	if addr, e = netlink.ParseAddr(addr2Add); e != nil {
-		return nil, status.Errorf(codes.Internal, "netlink: ParseAddr('%s') -> %v",
-			addr2Add, e)
+	if addr, err = netlink.ParseAddr(addr2Add); err != nil {
+		err = errors.WithMessagef(err, "netlink/ParseAddr('%s')", addr2Add)
+		return
 	}
-	if e = netlink.AddrAdd(lnk, addr); e != nil {
-		return nil, status.Errorf(codes.Internal, "netlink: AddrAdd('%s') -> %v",
-			addr, e)
+	if err = netlink.AddrAdd(lnk, addr); err != nil {
+		err = errors.WithMessagef(err, "netlink/AddrAdd('%s')", addr)
+		return
 	}
 	return new(emptypb.Empty), nil
+}
+
+func (srv *announceService) correctError(err error) error {
+	if err != nil && status.Code(err) == codes.Unknown {
+		switch errors.Cause(err) {
+		case context.DeadlineExceeded:
+			return status.New(codes.DeadlineExceeded, err.Error()).Err()
+		case context.Canceled:
+			return status.New(codes.Canceled, err.Error()).Err()
+		default:
+			if e := new(url.Error); errors.As(err, &e) {
+				switch errors.Cause(e.Err) {
+				case context.Canceled:
+					return status.New(codes.Canceled, err.Error()).Err()
+				case context.DeadlineExceeded:
+					return status.New(codes.DeadlineExceeded, err.Error()).Err()
+				default:
+					if e.Timeout() {
+						return status.New(codes.DeadlineExceeded, err.Error()).Err()
+					}
+				}
+			}
+			err = status.New(codes.Internal, err.Error()).Err()
+		}
+	}
+	return err
 }
 
 func (srv *announceService) enter(ctx context.Context) (leave func(), err error) {
@@ -235,7 +278,7 @@ func (srv *announceService) enter(ctx context.Context) (leave func(), err error)
 func (srv *announceService) isAddrIn(addr string) (bool, error) {
 	addrs, err := srv.netInterface.Addrs()
 	if err != nil {
-		return false, err
+		return false, errors.WithMessagef(err, "check is addr '%s' in", addr)
 	}
 	for _, a := range addrs {
 		if a.String() == addr {

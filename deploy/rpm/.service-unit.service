@@ -1,6 +1,6 @@
 [Unit]
-Description=crispy dummy service
-ConditionPathExists=/opt/crispy/dummy/dummy
+Description=<project> <app> service
+ConditionPathExists=/opt/<project>/<service>
 After=network.target
 
 [Service]
@@ -10,8 +10,8 @@ Group=root
 LimitNOFILE=1024
 Restart=on-failure
 RestartSec=10
-WorkingDirectory=/opt/crispy/dummy
-ExecStart=/opt/crispy/dummy/dummy -config=dummy.yaml
+WorkingDirectory=/opt/<project>
+ExecStart=/opt/<project>/<service> -config=<service>.yaml
 KillSignal=SIGINT
 SendSIGKILL=no
 PermissionsStartOnly=true
