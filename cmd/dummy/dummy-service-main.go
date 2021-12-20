@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/gradusp/crispy-dummy/internal/app"
 	"github.com/gradusp/crispy-dummy/internal/config"
@@ -17,7 +18,8 @@ func main() {
 	ctx := app.Context()
 	logger.SetLevel(zap.InfoLevel)
 	logger.Info(ctx, "--== HELLO ==--")
-	err := config.InitGlobalConfig(
+
+	confOpts := []config.Option{
 		config.WithAcceptEnvironment{EnvPrefix: "DUMMY"},
 		config.WithSourceFile{FileName: app.ConfigFile},
 		config.WithDefValue{Key: app.LoggerLevel, Val: "INFO"},
@@ -25,7 +27,14 @@ func main() {
 		config.WithDefValue{Key: app.TraceEnable, Val: false},
 		config.WithDefValue{Key: app.ServerGracefulShutdown, Val: "10s"},
 		config.WithDefValue{Key: app.ServerEndpoint, Val: "tcp://127.0.0.1:9001"},
-	)
+	}
+	switch runtime.GOOS {
+	case "linux":
+		confOpts = append(confOpts, config.WithDefValue{Key: app.AnnounceInterfaceName, Val: "lo"})
+	case "darwin":
+		confOpts = append(confOpts, config.WithDefValue{Key: app.AnnounceInterfaceName, Val: "lo0"})
+	}
+	err := config.InitGlobalConfig(confOpts...)
 	if err != nil {
 		logger.Fatal(ctx, err)
 	}
